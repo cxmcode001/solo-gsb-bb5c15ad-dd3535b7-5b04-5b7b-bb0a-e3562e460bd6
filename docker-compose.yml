@@ -1,0 +1,13 @@
+services:
+  nesting:
+    build: .
+    image: panel-nesting:latest
+    container_name: panel-nesting
+    ports:
+      - "${PORT:-8080}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
