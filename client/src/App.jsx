@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import BoardDiagram, { partColor } from './BoardDiagram.jsx';
+import CutExecutionPanel, { useCutExecution, cutStatus } from './CutExecution.jsx';
 
 const SAMPLE_BOARD = { boardWidth: 2440, boardHeight: 1220, kerf: 3, boardPrice: 180 };
 
@@ -109,6 +110,9 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // 每次生成方案自增：作为 ResultView 的 key，重挂载即清空逐板刀路执行记录
+  // （记录仅存当前页面并绑定本次生成方案；修改表单不影响，重新生成即清空）
+  const [planId, setPlanId] = useState(0);
   // 缺件补切：选中的损坏件（Set of itemKey）、补切结果与状态
   const [selected, setSelected] = useState(new Set());
   const [recut, setRecut] = useState(null);
@@ -301,6 +305,7 @@ export default function App() {
         setError(data.error || '计算失败，请检查输入');
       } else {
         setResult(data.result);
+        setPlanId((n) => n + 1); // 重新生成方案：刀路执行记录随 ResultView 重挂载而清空
         // 固定本次方案的输入快照与订单号（空白订单号以后端自动编号为准），
         // 撤单预览按快照计算，之后修改表单不影响已生成方案的预览
         setSnapshot(payload);
@@ -708,7 +713,7 @@ export default function App() {
     <div className="page">
       <header className="site-header">
         <h1>矩形板材下料 · 多订单拼版断头切割排料</h1>
-        <p>多张订单混合拼版：按订单与零件行顺序断头切割，可登记带唯一编号的临时余板库存（已开板放不下时先用余板、最后开标准新板），结果保留订单归属，按单取件并分摊材料费；方案生成后自动列出可回收余料清单，可勾选一键追加回余板库存；损坏件可勾选后生成独立补切方案；还可按订单预览撤单前后影响（原方案与表单不变）；也可把当前表单依次保存为多批做连续批次用料预演（首批余板为初始库存，余料按批回收入池，逐批给出新开标准板与累计材料费）；并可为已生成的方案做机台开料排程：在 2～3 台机台间分配整板加工（每板不可拆分、超单刀上限的机台不可分配），给出逐板机台、起止秒数与最短总完工时间</p>
+        <p>多张订单混合拼版：按订单与零件行顺序断头切割，可登记带唯一编号的临时余板库存（已开板放不下时先用余板、最后开标准新板），结果保留订单归属，按单取件并分摊材料费；方案生成后自动列出可回收余料清单，可勾选一键追加回余板库存；损坏件可勾选后生成独立补切方案；还可按订单预览撤单前后影响（原方案与表单不变）；也可把当前表单依次保存为多批做连续批次用料预演（首批余板为初始库存，余料按批回收入池，逐批给出新开标准板与累计材料费）；并可为已生成的方案做机台开料排程：在 2～3 台机台间分配整板加工（每板不可拆分、超单刀上限的机台不可分配），给出逐板机台、起止秒数与最短总完工时间；每张逐板裁切图旁的刀路执行记录可按直接前置关系标记 / 撤销每一刀（不同分支可交错、越序提示缺少前置、撤销级联后继），图上区分已完成 / 可执行 / 被阻塞并显示每板完成刀数（记录仅存当前页面、绑定本次方案，重新生成即清空）</p>
       </header>
 
       <main className="layout">
@@ -935,6 +940,7 @@ export default function App() {
                 <li>可登记带唯一编号的临时余板库存：已开板放不下时按输入顺序先试余板、最后才开标准新板</li>
                 <li>逐板裁切图按实际板尺寸绘制，余板不计材料费，列出余板已用 / 未用编号与新增标准板数</li>
                 <li>逐板裁切图、零件落位表与刀序继续可用，色块左上角标注订单号</li>
+                <li>逐板图旁的刀路执行记录按直接前置关系约束：仅前置完成才能标记，不同分支可交错执行；重复标记不计数、越序提示缺少的前置刀；撤销会连带撤销已完成后继；图上区分已完成（绿）/ 可执行（蓝）/ 被阻塞（红），显示每板完成刀数</li>
                 <li>结果按订单列出跨板件号、所在板号与坐标，方便分单取件</li>
                 <li>每板材料费按订单零件面积比例分摊（最大余数法分配分位尾差）</li>
                 <li>在分单取件清单勾选损坏件，可生成独立的缺件补切方案（补切只开标准新板，不耗用余板）</li>
@@ -949,7 +955,7 @@ export default function App() {
 
           {result && (
             <>
-              <ResultView result={result} selected={selected} onToggleDamaged={toggleDamaged} />
+              <ResultView key={planId} result={result} selected={selected} onToggleDamaged={toggleDamaged} />
               <OffcutSection
                 result={result}
                 selected={offcutSelected}
@@ -1003,13 +1009,24 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        断头切割规则：每一刀都贯穿当前所在矩形区域 · 允许零件旋转 90° · 按订单与零件行固定顺序排料 · 可回收余料取自各板最终空闲矩形（不含零件与锯缝），可追加为临时余板库存 · 补切仅重排所选损坏件，原方案不变 · 撤单预览按输入快照对比前后方案，表单与原方案不变 · 连续预演按批次快照逐批排料，余板池跨批流转，表单与单次方案不变 · 机台排程按输入快照重算同一方案，在 2～3 台机台间分配整板加工（超单刀上限的机台不可分配），同一机台按板号顺序连续加工，取全部板完成时间最小的分配，原排料结果不变 · 分时电费核算沿用同一排程，每板起止秒数按机台开工时刻换算实际时刻，跨电价边界或午夜按日循环拆分（分段费用 = 功率 × 加工秒数 ÷ 3600 × 电价，逐板四舍五入到分再汇总），修改计价参数只重新核算、不改原排料与排程
+        断头切割规则：每一刀都贯穿当前所在矩形区域 · 允许零件旋转 90° · 按订单与零件行固定顺序排料 · 可回收余料取自各板最终空闲矩形（不含零件与锯缝），可追加为临时余板库存 · 补切仅重排所选损坏件，原方案不变 · 撤单预览按输入快照对比前后方案，表单与原方案不变 · 连续预演按批次快照逐批排料，余板池跨批流转，表单与单次方案不变 · 机台排程按输入快照重算同一方案，在 2～3 台机台间分配整板加工（超单刀上限的机台不可分配），同一机台按板号顺序连续加工，取全部板完成时间最小的分配，原排料结果不变 · 分时电费核算沿用同一排程，每板起止秒数按机台开工时刻换算实际时刻，跨电价边界或午夜按日循环拆分（分段费用 = 功率 × 加工秒数 ÷ 3600 × 电价，逐板四舍五入到分再汇总），修改计价参数只重新核算、不改原排料与排程 · 刀路执行记录以未舍入几何按现有刀序回放矩形切分得到每刀的直接前置（初始整板无前置），仅前置完成才能标记、不同分支可交错、重复标记不计数、越序提示缺少前置、撤销级联已完成后继；记录仅存当前页面并绑定本次生成方案，修改表单不影响、重新生成即清空，不改变落位 / 分摊 / 排程
       </footer>
     </div>
   );
 }
 
 function ResultView({ result, selected, onToggleDamaged }) {
+  // 逐板刀路执行记录：仅存当前页面、绑定本次生成方案；
+  // ResultView 以 planId 为 key，重新生成方案时重挂载，记录自动清空
+  const cutExec = useCutExecution(result.boards);
+
+  // 图上刀序徽章点击：已完成 → 撤销（含后继级联）；可执行 → 标记完成；
+  // 被阻塞 → 同样触发标记逻辑，由面板提示缺少的前置刀
+  const onDiagramCutClick = (boardIndex) => (seq, state) => {
+    if (state === 'done') cutExec.undoCut(boardIndex, seq);
+    else cutExec.markDone(boardIndex, seq);
+  };
+
   return (
     <>
       <h2>排料结果</h2>
@@ -1165,6 +1182,9 @@ function ResultView({ result, selected, onToggleDamaged }) {
       <div className="legend">
         <span><i className="sw remainder" />余料</span>
         <span><i className="sw kerf" />锯缝（虚线为刀刃，数字为下刀次序）</span>
+        <span><i className="sw ce-legend-dot done" />刀路已完成</span>
+        <span><i className="sw ce-legend-dot ready" />刀路可执行</span>
+        <span><i className="sw ce-legend-dot blocked" />刀路被阻塞</span>
         {legendKeys(result).map(({ order, part }) => (
           <span key={`${order}⟂${part}`}>
             <i className="sw" style={{ background: partColor(part, order) }} />
@@ -1174,7 +1194,12 @@ function ResultView({ result, selected, onToggleDamaged }) {
       </div>
 
       {/* 逐板图与刀序（按每块板的实际尺寸绘图：余板尺寸可能与标准板不同）*/}
-      {result.boards.map((b) => (
+      {result.boards.map((b) => {
+        const cutStates = {};
+        for (const c of b.cuts) cutStates[c.seq] = cutExec.statusOf(b.index, c);
+        const doneCuts = cutExec.completedCount(b.index);
+        const boardAllDone = b.cuts.length > 0 && doneCuts >= b.cuts.length;
+        return (
         <div className={`board-card ${b.kind === 'stock' ? 'stock-board' : ''}`} key={b.index}>
           <h3>
             第 {b.index} 张板 / 共 {result.boardsCount} 张
@@ -1184,14 +1209,33 @@ function ResultView({ result, selected, onToggleDamaged }) {
               <span className="board-kind standard">新增标准板（{strip(b.width)} × {strip(b.height)}）</span>
             )}
             {b.kind === 'standard' && <span className="board-price">板价 ¥{yuan(b.cost.priceCents)}</span>}
+            {b.cuts.length > 0 && (
+              <span className={`cut-progress-chip ${boardAllDone ? 'all-done' : ''}`}>
+                已完成刀数 {doneCuts}/{b.cuts.length}
+              </span>
+            )}
           </h3>
-          <BoardDiagram board={b} boardWidth={b.width} boardHeight={b.height} />
+          <div className="board-diagram-row">
+            <div className="board-diagram-col">
+              <BoardDiagram
+                board={b}
+                boardWidth={b.width}
+                boardHeight={b.height}
+                cutStates={cutStates}
+                onCutClick={onDiagramCutClick(b.index)}
+              />
+            </div>
+            <CutExecutionPanel board={b} exec={cutExec} />
+          </div>
           <div className="board-stats">
             <span>零件 {fmt(b.partsArea)}</span>
             <span>锯缝 {fmt(b.kerfArea)}</span>
             <span>余料 {fmt(b.remainderArea)}</span>
             <span>利用率 {b.utilization}%</span>
             <span>{b.cuts.length} 刀</span>
+            <span className={boardAllDone ? 'cut-count-done' : 'cut-count'}>
+              完成 {doneCuts}/{b.cuts.length} 刀
+            </span>
             {result.maxCutLength != null && (
               <span className="cut-limit">实际最长刀 {strip(b.longestCut)} / 上限 {strip(result.maxCutLength)}</span>
             )}
@@ -1245,13 +1289,14 @@ function ResultView({ result, selected, onToggleDamaged }) {
             </table>
             <table className="detail-table">
               <thead>
-                <tr><th>刀序</th><th>方向</th><th>起点 x1,y1</th><th>终点 x2,y2</th><th>贯穿长度</th></tr>
+                <tr><th>刀序</th><th>方向</th><th>直接前置刀</th><th>起点 x1,y1</th><th>终点 x2,y2</th><th>贯穿长度</th></tr>
               </thead>
               <tbody>
                 {b.cuts.map((c) => (
                   <tr key={c.seq}>
                     <td>{c.seq}</td>
                     <td>{c.type === 'v' ? '竖切' : '横切'}</td>
+                    <td>{c.pre == null ? '初始整板（无前置）' : `第 ${c.pre} 刀`}</td>
                     <td>{strip(c.x1)}, {strip(c.y1)}</td>
                     <td>{strip(c.x2)}, {strip(c.y2)}</td>
                     <td>{strip(c.length)}</td>
@@ -1261,7 +1306,8 @@ function ResultView({ result, selected, onToggleDamaged }) {
             </table>
           </details>
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -1533,13 +1579,14 @@ function RecutResult({ recut }) {
             </table>
             <table className="detail-table">
               <thead>
-                <tr><th>刀序</th><th>方向</th><th>起点 x1,y1</th><th>终点 x2,y2</th><th>贯穿长度</th></tr>
+                <tr><th>刀序</th><th>方向</th><th>直接前置刀</th><th>起点 x1,y1</th><th>终点 x2,y2</th><th>贯穿长度</th></tr>
               </thead>
               <tbody>
                 {b.cuts.map((c) => (
                   <tr key={c.seq}>
                     <td>{c.seq}</td>
                     <td>{c.type === 'v' ? '竖切' : '横切'}</td>
+                    <td>{c.pre == null ? '初始整板（无前置）' : `第 ${c.pre} 刀`}</td>
                     <td>{strip(c.x1)}, {strip(c.y1)}</td>
                     <td>{strip(c.x2)}, {strip(c.y2)}</td>
                     <td>{strip(c.length)}</td>

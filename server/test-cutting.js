@@ -62,6 +62,62 @@ assert.ok(k0.boards[0].cuts.length >= 2, '零锯缝也应有切割刀路');
 assert.strictEqual(k0.kerfArea, 0);
 assert.strictEqual(k0.partsArea + k0.remainderArea, 500000);
 
+// 3b) 刀路直接前置（pre）：初始整板无前置；同一次落料的第二刀前置第一刀；
+//     不同分支（右余料 / 下余料）可交错执行，各自首刀的前置为产生该矩形的刀
+const preBoard = cutBoards({
+  boardWidth: 1200, boardHeight: 800, kerf: 0,
+  parts: [{ name: '块', width: 500, height: 300, quantity: 4 }],
+});
+assert.strictEqual(preBoard.boardsCount, 1);
+// 1 板 4 件（左上、左下、右上、右下，竖切优先）：
+// 刀1 竖切整板（无前置），刀2 左上横切（pre=1），刀3 左下横切（pre=2，左列链），
+// 刀4 右上竖切（pre=1，右列另一分支，与刀2/3 交错），刀5、刀6 依次 pre=4、5
+assert.deepStrictEqual(preBoard.boards[0].cuts.map((c) => c.pre), [null, 1, 2, 1, 4, 5]);
+assert.deepStrictEqual(preBoard.boards[0].cuts.map((c) => c.type), ['v', 'h', 'h', 'v', 'h', 'h']);
+// 锯缝非零时同样存在交错分支（回放使用未舍入几何并扣除实际锯缝带；
+// 锯缝使右列在 503 宽料块内改为先横后竖，并多出沿窄余料的修整刀）
+const preKerf = cutBoards({
+  boardWidth: 1200, boardHeight: 800, kerf: 3,
+  parts: [{ name: '块', width: 500, height: 300, quantity: 4 }],
+});
+assert.deepStrictEqual(preKerf.boards[0].cuts.map((c) => c.pre), [null, 1, 2, 1, 4, 4, 6]);
+assert.deepStrictEqual(preKerf.boards[0].cuts.map((c) => c.type), ['v', 'h', 'h', 'h', 'v', 'v', 'h']);
+// 多板时每张新板的首刀无前置；同一次落料的第二刀前置第一刀
+const preMulti = cutBoards({
+  boardWidth: 1200, boardHeight: 800, kerf: 0,
+  parts: [{ name: '块', width: 600, height: 400, quantity: 5 }],
+});
+assert.strictEqual(preMulti.boardsCount, 2);
+assert.deepStrictEqual(preMulti.boards[0].cuts.map((c) => c.pre), [null, 1, 1]);
+assert.deepStrictEqual(preMulti.boards[1].cuts.map((c) => c.pre), [null, 1]);
+// 无刀板（零件恰好铺满）pre 列表为空
+const preFull = cutBoards({
+  boardWidth: 600, boardHeight: 400, kerf: 3,
+  parts: [{ name: '整', width: 600, height: 400, quantity: 2 }],
+});
+assert.deepStrictEqual(preFull.boards[1].cuts.map((c) => c.pre), []);
+// 前置引用一律为 null 或更早的刀序；前置闭包构成森林（沿 pre 上溯必到 null）
+for (const b of preKerf.boards) {
+  b.cuts.forEach((c) => {
+    assert(c.pre === null || (Number.isInteger(c.pre) && c.pre >= 1 && c.pre < c.seq),
+      `板 ${b.index} 第 ${c.seq} 刀的直接前置非法：${c.pre}`);
+    let p = c.pre;
+    const seen = new Set();
+    while (p !== null) {
+      assert(!seen.has(p), `板 ${b.index} 前置链出现环`);
+      seen.add(p);
+      p = b.cuts[p - 1].pre;
+    }
+  });
+}
+// 横切优先切法同样成立：第二刀前置第一刀（1000×800 落 600×300，锯缝损失更小者为横切优先）
+const preH = cutBoards({
+  boardWidth: 1000, boardHeight: 800, kerf: 3,
+  parts: [{ name: 'a', width: 600, height: 300, quantity: 1 }],
+});
+assert.deepStrictEqual(preH.boards[0].cuts.map((c) => c.pre), [null, 1]);
+assert.deepStrictEqual(preH.boards[0].cuts.map((c) => c.type), ['h', 'v']);
+
 // 4) 必须旋转才能放下
 const rot = cutBoards({
   boardWidth: 500, boardHeight: 300, kerf: 0,

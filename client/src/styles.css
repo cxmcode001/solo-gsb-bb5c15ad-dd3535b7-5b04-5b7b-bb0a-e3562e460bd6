@@ -240,6 +240,170 @@ input:focus { outline: 2px solid rgba(37, 99, 235, 0.35); border-color: var(--bl
 .board-border { fill: none; stroke: #1f2937; stroke-width: 2; }
 .kerf-band { fill: #d4d4d4; opacity: 0.9; }
 .kerf-line { stroke: #525252; stroke-width: 1.1; }
+
+/* ---- 刀路执行状态（已完成 / 可执行 / 被阻塞） ---- */
+:root {
+  --cut-done: #059669;
+  --cut-ready: #2563eb;
+  --cut-blocked: #b91c1c;
+}
+.kerf-line.cut-done { stroke: var(--cut-done); stroke-width: 2.2; }
+.kerf-line.cut-ready { stroke: var(--cut-ready); stroke-width: 1.8; }
+.kerf-line.cut-blocked { stroke: var(--cut-blocked); stroke-width: 1.2; stroke-dasharray: 3 3; opacity: 0.75; }
+.cut-badge.cut-done circle { fill: var(--cut-done); }
+.cut-badge.cut-ready circle { fill: var(--cut-ready); }
+.cut-badge.cut-blocked circle { fill: #fff; stroke: var(--cut-blocked); stroke-width: 1.6; }
+.cut-badge.cut-blocked text { fill: var(--cut-blocked); }
+.cut-badge.clickable { cursor: pointer; }
+.cut-badge.clickable circle { transition: r 0.12s ease; }
+.cut-badge.clickable:hover circle { stroke: #f59e0b; stroke-width: 2.5; }
+
+/* 逐板裁切图 + 刀路执行记录并排（窄屏纵向堆叠） */
+.board-diagram-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+.board-diagram-col { min-width: 0; }
+@media (max-width: 1100px) {
+  .board-diagram-row { grid-template-columns: 1fr; }
+}
+
+/* 刀路执行记录面板 */
+.cut-exec-panel {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px 12px;
+  position: sticky;
+  top: 16px;
+}
+@media (max-width: 1100px) { .cut-exec-panel { position: static; } }
+.cut-exec-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cut-progress {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cut-progress.all-done { color: #fff; background: var(--cut-done); border-color: var(--cut-done); }
+.cut-exec-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+.cut-exec-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.ce-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  display: inline-block; border: 1px solid rgba(0, 0, 0, 0.12);
+}
+.ce-dot.done { background: var(--cut-done); }
+.ce-dot.ready { background: var(--cut-ready); }
+.ce-dot.blocked { background: #fff; border-color: var(--cut-blocked); }
+.cut-exec-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.cut-exec-row {
+  display: grid;
+  grid-template-columns: 24px 38px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 4px 6px 4px 4px;
+  background: #fff;
+  font-size: 12px;
+}
+.cut-exec-row .ce-seq {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  background: #475569;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.cut-exec-row.done { border-color: #6ee7b7; background: #ecfdf5; }
+.cut-exec-row.done .ce-seq { background: var(--cut-done); }
+.cut-exec-row.ready { border-color: #93c5fd; background: #eff6ff; }
+.cut-exec-row.ready .ce-seq { background: var(--cut-ready); }
+.cut-exec-row.blocked { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+.cut-exec-row.blocked .ce-seq { background: #fff; color: var(--cut-blocked); border: 1px solid var(--cut-blocked); }
+.cut-exec-row .ce-type { font-weight: 600; color: #334155; }
+.cut-exec-row.blocked .ce-type { color: #991b1b; }
+.ce-pre { color: #64748b; line-height: 1.35; }
+.ce-pre b { color: #0f172a; }
+.ce-kids {
+  grid-column: 2 / -2;
+  font-size: 11px;
+  color: #0d9488;
+}
+.ce-btn {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.ce-btn.ready { background: var(--cut-ready); border-color: var(--cut-ready); color: #fff; }
+.ce-btn.blocked { color: var(--cut-blocked); border-color: #fca5a5; background: #fff; }
+.ce-btn.undo { color: #b45309; border-color: #fcd34d; }
+.cut-exec-msg {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cut-exec-msg.ok { background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; }
+.cut-exec-msg.warn { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.cut-exec-msg.info { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+.cut-exec-empty { margin: 6px 0 0; font-size: 12px; color: #64748b; }
+.cut-exec-hint { margin: 8px 0 0; font-size: 11px; color: #94a3b8; line-height: 1.5; }
+
+/* 板标题上的完成刀数徽标 */
+.cut-progress-chip {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  font-variant-numeric: tabular-nums;
+}
+.cut-progress-chip.all-done { background: var(--cut-done); border-color: var(--cut-done); color: #fff; }
+.board-stats .cut-count { font-weight: 600; color: #334155; }
+.board-stats .cut-count-done { font-weight: 700; color: var(--cut-done); }
+.ce-legend-dot { border-radius: 50% !important; }
+.ce-legend-dot.done { background: var(--cut-done); }
+.ce-legend-dot.ready { background: var(--cut-ready); }
+.ce-legend-dot.blocked { background: #fff; border: 1px solid var(--cut-blocked); }
+
 .part-label {
   text-anchor: middle;
   font-size: 12px;

@@ -864,8 +864,81 @@ function collectOffcuts(boards, minLength, minWidth) {
 }
 
 /**
- * 输出整理：逐板编号、刀路端点、面积统计与逐板材料费分摊（最大余数法），
- * 同时按订单汇总件数 / 面积 / 分摊额 / 所在板号。
+ * 刀路直接前置回放（未舍入几何）：按现有刀序在板内回放断头矩形切分，
+ * 锯缝带的扣除方式与 buildSplit 完全一致（零锯缝时缝带宽 0 但刀仍存在）。
+ *
+ * 维护当前空闲矩形池（初始为整张板，产生刀记为 -1 = 无前置），逐刀找到该刀
+ * 所贯穿的矩形（竖切：矩形顶边 / 高度与缝带一致且横向包含缝带；横切同理），
+ * 该矩形的产生刀即这一刀的直接前置；再按切分几何用切后矩形替换原矩形：
+ *  - 竖切优先的第一刀（贯穿全高的竖切）切出右侧余料，左侧料块保留到下一刀
+ *    （下一刀恰为在该料块上贯穿其全宽的横切）——否则左侧即零件本身、直接移除；
+ *  - 横切优先的第一刀（贯穿全宽的横切）同理：上侧料块仅在下一刀为其内部竖切时保留；
+ *  - 第二刀（另一侧不贯穿整板）切完后料块即为零件，只保留余料一侧。
+ * 判断“料块是否保留到下一刀”只看下一刀的几何是否恰在该料块内（排料时同一次
+ * 落料的两刀在刀序中相邻，后续刀不可能再进入已被零件占走的区域）。
+ *
+ * 返回每刀的直接前置刀序（从 1 起；初始整板无前置 → null），顺序与 board.cuts 一致。
+ */
+function replayCutPredecessors(board) {
+  const cuts = board.cuts;
+  const pres = new Array(cuts.length).fill(null);
+  if (cuts.length === 0) return pres;
+
+  const eq = (a, b) => Math.abs(a - b) <= EPS;
+  // 空闲矩形：{ x, y, w, h, by }，by 为产生刀在 cuts 中的下标（-1 = 初始整板）
+  let pool = [{ x: 0, y: 0, w: board.width, h: board.height, by: -1 }];
+
+  cuts.forEach((c, i) => {
+    const band = c.band;
+    let mi = -1;
+    if (c.type === 'v') {
+      // 竖切贯穿某矩形全高：顶边一致、高度一致、缝带横向落在矩形内
+      mi = pool.findIndex((r) =>
+        eq(band.y, r.y) && eq(band.h, r.h) &&
+        band.x >= r.x - EPS && band.x + band.w <= r.x + r.w + EPS);
+    } else {
+      // 横切贯穿某矩形全宽：左边一致、宽度一致、缝带纵向落在矩形内
+      mi = pool.findIndex((r) =>
+        eq(band.x, r.x) && eq(band.w, r.w) &&
+        band.y >= r.y - EPS && band.y + band.h <= r.y + r.h + EPS);
+    }
+    if (mi < 0) return; // 几何上不应发生（刀路由同一排料过程产生）；防御性保留无前置
+
+    const r = pool[mi];
+    pres[i] = r.by < 0 ? null : r.by + 1;
+    const rest = pool.filter((_, idx) => idx !== mi);
+    const next = cuts[i + 1] ? cuts[i + 1].band : null;
+    const nextType = cuts[i + 1] ? cuts[i + 1].type : null;
+    const added = [];
+
+    if (c.type === 'v') {
+      const leftW = band.x - r.x; // 左侧料块宽（恰为零件占位宽）
+      const right = { x: band.x + band.w, y: r.y, w: r.x + r.w - (band.x + band.w), h: r.h };
+      // 下一刀是在左侧料块上的横切（竖切优先的第二刀）时，左侧料块保留一刻
+      const keepsLeft = next && nextType === 'h' &&
+        eq(next.x, r.x) && eq(next.w, leftW) &&
+        next.y >= r.y - EPS && next.y + next.h <= r.y + r.h + EPS;
+      if (keepsLeft) added.push({ x: r.x, y: r.y, w: leftW, h: r.h, by: i });
+      if (right.w > EPS && right.h > EPS) added.push({ ...right, by: i });
+    } else {
+      const upperH = band.y - r.y; // 上侧料块高（恰为零件占位高）
+      const bottom = { x: r.x, y: band.y + band.h, w: r.w, h: r.y + r.h - (band.y + band.h) };
+      // 下一刀是在上侧料块上的竖切（横切优先的第二刀）时，上侧料块保留一刻
+      const keepsUpper = next && nextType === 'v' &&
+        eq(next.y, r.y) && eq(next.h, upperH) &&
+        next.x >= r.x - EPS && next.x + next.w <= r.x + r.w + EPS;
+      if (keepsUpper) added.push({ x: r.x, y: r.y, w: r.w, h: upperH, by: i });
+      if (bottom.w > EPS && bottom.h > EPS) added.push({ ...bottom, by: i });
+    }
+    pool = [...rest, ...added];
+  });
+
+  return pres;
+}
+
+/**
+ * 输出整理：逐板编号、刀路端点（含直接前置刀 pre）、面积统计与逐板材料费分摊
+ * （最大余数法），同时按订单汇总件数 / 面积 / 分摊额 / 所在板号。
  * ordersList：[{ order, seq }]，决定汇总与分摊的订单顺序。
  */
 function summarizeBoards(boards, ordersList) {
@@ -882,10 +955,17 @@ function summarizeBoards(boards, ordersList) {
   });
 
   const resultBoards = boards.map((b, bi) => {
+    // 用未舍入几何按现有刀序回放矩形切分，得到每刀的直接前置刀（初始整板无前置）
+    const cutPres = replayCutPredecessors(b);
     const cuts = b.cuts.map((c, i) => {
       const seq = i + 1;
       const { band } = c;
-      const base = { seq, type: c.type, band: { x: round3(band.x), y: round3(band.y), w: round3(band.w), h: round3(band.h) } };
+      const base = {
+        seq,
+        pre: cutPres[i],
+        type: c.type,
+        band: { x: round3(band.x), y: round3(band.y), w: round3(band.w), h: round3(band.h) },
+      };
       if (c.type === 'v') {
         const cx = band.x + band.w / 2;
         return { ...base, x1: round3(cx), y1: round3(band.y), x2: round3(cx), y2: round3(band.y + band.h), length: round3(band.h) };
