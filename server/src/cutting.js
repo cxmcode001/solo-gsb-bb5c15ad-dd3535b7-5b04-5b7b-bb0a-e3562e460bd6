@@ -80,6 +80,13 @@
  *  - 每板起止秒数叠加该机台开工时刻换算为实际时钟时刻；跨电价边界或午夜时按日循环拆分；
  *  - 分段费用 = 功率 × 加工秒数 ÷ 3600 × 电价；每板费用四舍五入到分后再汇总；
  *  - 输出逐板用电量与电费、逐机台电费与总电费；只改计价参数即可重新核算，不改变排料与排程。
+ *
+ * 刀路执行前置（每刀 pred 字段）：
+ *  - 排料结束后，对每张板用未舍入几何按现有刀序回放矩形切分：初始为整板（无前置），
+ *    每刀在其当前所在矩形内贯穿，扣除该刀实际锯缝带后，剩余矩形记为由该刀产生；
+ *  - 每刀的直接前置 = 所切矩形的产生刀（0 表示所切的是初始整板、无前置）；
+ *  - 前置关系只是对既有刀路的只读回放，落位、分摊与排程均不受影响；
+ *    零锯缝（缝带宽度为 0）、余板尺寸与无刀板同样适用。
  */
 
 const EPS = 1e-9;
@@ -864,6 +871,45 @@ function collectOffcuts(boards, minLength, minWidth) {
 }
 
 /**
+ * 刀路执行前置关系回放（只读计算，不影响落位 / 分摊 / 排程）。
+ * 以未舍入几何按现有刀序回放矩形切分：
+ *  - 初始为整板矩形（无产生刀）；每刀的锯缝带严格位于某个当前矩形内部
+ *    （法向坐标落在矩形内部，全部当前矩形中唯一被包含）；
+ *  - 该刀的直接前置 = 所切矩形的产生刀；初始整板无前置（返回 -1）；
+ *  - 回放时从所切矩形中扣除该刀的实际锯缝带（边修刀缝带可能窄于标准锯缝、
+ *    零锯缝时缝带宽度为 0），剩余矩形记为由该刀产生，供后续刀查找所属。
+ * cuts：未舍入的刀路数组（{ type, band }，按刀序排列）。
+ * 返回与 cuts 等长的数组，元素为直接前置刀在 cuts 中的下标（-1 表示无前置）。
+ */
+function traceCutPredecessors(boardWidth, boardHeight, cuts) {
+  // 当前矩形集合：{ x, y, w, h, by }，by = 产生该矩形的刀下标（-1 = 初始整板）
+  const rects = [{ x: 0, y: 0, w: boardWidth, h: boardHeight, by: -1 }];
+  const pushRect = (rect) => {
+    if (rect.w > EPS && rect.h > EPS) rects.push(rect);
+  };
+  return cuts.map((c, ci) => {
+    const band = c.band;
+    const ri = rects.findIndex((r) =>
+      band.x >= r.x - EPS && band.y >= r.y - EPS &&
+      band.x + band.w <= r.x + r.w + EPS && band.y + band.h <= r.y + r.h + EPS
+    );
+    if (ri === -1) return -1; // 几何上不会发生（刀路与回放同源），兜底按无前置处理
+    const r = rects[ri];
+    rects.splice(ri, 1);
+    if (c.type === 'v') {
+      // 竖切：扣除实际锯缝带后分为左块与右块
+      pushRect({ x: r.x, y: r.y, w: band.x - r.x, h: r.h, by: ci });
+      pushRect({ x: band.x + band.w, y: r.y, w: r.x + r.w - band.x - band.w, h: r.h, by: ci });
+    } else {
+      // 横切：扣除实际锯缝带后分为上块与下块
+      pushRect({ x: r.x, y: r.y, w: r.w, h: band.y - r.y, by: ci });
+      pushRect({ x: r.x, y: band.y + band.h, w: r.w, h: r.y + r.h - band.y - band.h, by: ci });
+    }
+    return r.by;
+  });
+}
+
+/**
  * 输出整理：逐板编号、刀路端点、面积统计与逐板材料费分摊（最大余数法），
  * 同时按订单汇总件数 / 面积 / 分摊额 / 所在板号。
  * ordersList：[{ order, seq }]，决定汇总与分摊的订单顺序。
@@ -882,10 +928,13 @@ function summarizeBoards(boards, ordersList) {
   });
 
   const resultBoards = boards.map((b, bi) => {
+    // 刀路执行前置：按现有刀序回放矩形切分，得到每刀的直接前置（0 = 初始整板、无前置）
+    const preds = traceCutPredecessors(b.width, b.height, b.cuts);
     const cuts = b.cuts.map((c, i) => {
       const seq = i + 1;
+      const pred = preds[i] < 0 ? 0 : preds[i] + 1;
       const { band } = c;
-      const base = { seq, type: c.type, band: { x: round3(band.x), y: round3(band.y), w: round3(band.w), h: round3(band.h) } };
+      const base = { seq, pred, type: c.type, band: { x: round3(band.x), y: round3(band.y), w: round3(band.w), h: round3(band.h) } };
       if (c.type === 'v') {
         const cx = band.x + band.w / 2;
         return { ...base, x1: round3(cx), y1: round3(band.y), x2: round3(cx), y2: round3(band.y + band.h), length: round3(band.h) };

@@ -20,8 +20,10 @@ const PAD = 14;
  * 单板裁切图示：
  *  - 米黄色底 = 余料；彩色块 = 零件（左上角小字标注订单号）；灰色锯缝带 + 虚线刀刃 = 每一刀
  *  - 圆形编号标注下刀次序（贯穿当前矩形区域）
+ *  - 可选 cutStatus（{ 刀序: 'done' | 'ready' | 'blocked' }，来自刀路执行记录）：
+ *    刀刃线与刀序徽章按执行状态着色（已完成 / 可执行 / 被阻塞），未传时保持默认配色
  */
-export default function BoardDiagram({ board, boardWidth, boardHeight }) {
+export default function BoardDiagram({ board, boardWidth, boardHeight, cutStatus }) {
   const maxW = 620;
   const maxH = 520;
   const sx = maxW / boardWidth;
@@ -95,7 +97,7 @@ export default function BoardDiagram({ board, boardWidth, boardHeight }) {
         );
       })}
 
-      {/* 锯缝带与刀刃线、刀序编号 */}
+      {/* 锯缝带与刀刃线、刀序编号（按刀路执行状态着色） */}
       {board.cuts.map((c) => {
         const b = c.band;
         const cx = px((b.x + b.w / 2));
@@ -103,6 +105,8 @@ export default function BoardDiagram({ board, boardWidth, boardHeight }) {
         const badgeR = 9;
         // 锯缝宽度为 0（理想切割）时只画刀刃线；非零缝带至少渲染 1px 宽
         const showBand = c.type === 'v' ? b.w > 0 : b.h > 0;
+        const execCls = cutStatus && cutStatus[c.seq] ? ` ${cutStatus[c.seq]}` : '';
+        const execLabel = { done: '已完成', ready: '可执行', blocked: '被阻塞' }[cutStatus?.[c.seq]];
         return (
           <g key={`c-${c.seq}`}>
             {showBand && (
@@ -111,7 +115,7 @@ export default function BoardDiagram({ board, boardWidth, boardHeight }) {
                 y={px(b.y)}
                 width={Math.max(b.w * scale, 1)}
                 height={Math.max(b.h * scale, 1)}
-                className="kerf-band"
+                className={`kerf-band${execCls}`}
               />
             )}
             <line
@@ -119,13 +123,15 @@ export default function BoardDiagram({ board, boardWidth, boardHeight }) {
               y1={px(c.y1)}
               x2={px(c.x2)}
               y2={px(c.y2)}
-              className="kerf-line"
+              className={`kerf-line${execCls}`}
               strokeDasharray="5 4"
             />
-            <g className="cut-badge">
+            <g className={`cut-badge${execCls}`}>
               <circle cx={cx} cy={cy} r={badgeR} />
               <text x={cx} y={cy + 0.5}>{c.seq}</text>
-              <title>{`第 ${c.seq} 刀（${c.type === 'v' ? '竖切' : '横切'}），贯穿长度 ${strip(c.length)}`}</title>
+              <title>{`第 ${c.seq} 刀（${c.type === 'v' ? '竖切' : '横切'}），贯穿长度 ${strip(c.length)}` +
+                (c.pred > 0 ? `，前置：第 ${c.pred} 刀` : '，前置：整板') +
+                (execLabel ? `，${execLabel}` : '')}</title>
             </g>
           </g>
         );

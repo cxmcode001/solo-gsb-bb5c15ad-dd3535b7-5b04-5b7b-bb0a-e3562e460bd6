@@ -12,6 +12,6 @@
     "dev:client": "npm --workspace client run dev",
     "build": "npm --workspace client run build",
     "start": "npm --workspace server run start",
-    "test": "node server/test-cutting.js"
+    "test": "node server/test-cutting.js && node client/test-cutprogress.mjs"
   }
 }

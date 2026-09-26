@@ -1331,4 +1331,51 @@ assert.throws(() => electricityBoards({
   ],
 }), UserError, '开工时刻格式错误应报错');
 
+// 62) 刀路执行前置（pred）：按现有刀序回放矩形切分，每刀记录所切矩形的产生刀
+// 2×2 网格（零锯缝）：第 1 刀竖切整板（无前置），第 2、3 刀分别切第 1 刀产生的左条与右块
+const predGrid = cutBoards({
+  boardWidth: 1200, boardHeight: 800, kerf: 0,
+  parts: [{ name: '块', width: 600, height: 400, quantity: 4 }],
+});
+assert.deepStrictEqual(predGrid.boards[0].cuts.map((c) => c.pred), [0, 1, 1]);
+assert.deepStrictEqual(predGrid.boards[0].cuts.map((c) => c.seq), [1, 2, 3]);
+// 零锯缝 1000×500 两件：第 3 刀切第 1 刀产生的右块，第 4 刀切第 3 刀产生的左条
+const predK0 = cutBoards({
+  boardWidth: 1000, boardHeight: 500, kerf: 0,
+  parts: [{ name: 'A', width: 400, height: 300, quantity: 2 }],
+});
+assert.deepStrictEqual(predK0.boards[0].cuts.map((c) => c.pred), [0, 1, 1, 3]);
+// 带锯缝多板：前置刀序号恒小于本刀序号（刀序回放单调），首刀前置恒为 0（初始整板）
+const predK3 = cutBoards({
+  boardWidth: 2440, boardHeight: 1220, kerf: 3, boardPrice: 10,
+  parts: [{ name: '柜门', width: 600, height: 400, quantity: 8 }],
+});
+for (const b of predK3.boards) {
+  b.cuts.forEach((c, i) => {
+    assert.strictEqual(c.pred >= 0 && c.pred < c.seq, true, `板 ${b.index} 第 ${c.seq} 刀前置越界`);
+    if (i === 0) assert.strictEqual(c.pred, 0, '每板首刀所切必为初始整板');
+  });
+}
+assert.deepStrictEqual(predK3.boards[0].cuts.map((c) => c.pred),
+  [0, 1, 2, 3, 1, 5, 6, 5, 8, 9, 8, 11]);
+// 无刀板（零件恰好铺满）：无刀路即无前置记录，字段仍为数组
+const predFull = cutBoards({
+  boardWidth: 1000, boardHeight: 600, kerf: 2,
+  parts: [{ name: '整板', width: 1000, height: 600, quantity: 1 }],
+});
+assert.strictEqual(predFull.boards[0].cuts.length, 0);
+// 余板尺寸同样适用：余板上的刀路按余板实际尺寸回放
+const predStock = cutBoards({
+  boardWidth: 2440, boardHeight: 1220, kerf: 3,
+  stockBoards: [{ id: 'YB-01', width: 1200, height: 800 }],
+  parts: [{ name: '柜门', width: 600, height: 400, quantity: 3 }],
+});
+assert.strictEqual(predStock.boards[0].kind, 'stock');
+assert.deepStrictEqual(predStock.boards[0].cuts.map((c) => c.pred), [0, 1, 1, 3]);
+assert.deepStrictEqual(predStock.boards[1].cuts.map((c) => c.pred), [0, 1]);
+// 前置关系不改动既有输出：落位、分摊与排程字段保持原样（仅新增 pred 字段）
+assert.strictEqual(predK3.totalMaterialCents, predK3.standardBoardsCount * 1000);
+assert.strictEqual(predK3.boards[0].cost.shares.reduce((s, x) => s + x.cents, 0),
+  predK3.boards[0].cost.priceCents);
+
 console.log('全部算法自检通过 ✔');

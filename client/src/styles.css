@@ -219,6 +219,9 @@ input:focus { outline: 2px solid rgba(37, 99, 235, 0.35); border-color: var(--bl
 .sw { width: 14px; height: 14px; border: 1px solid #94a3b8; border-radius: 3px; display: inline-block; }
 .sw.remainder { background: #fef3c7; }
 .sw.kerf { background: repeating-linear-gradient(45deg, #d4d4d4 0 3px, #a3a3a3 3px 6px); }
+.sw.cut-done { background: #16a34a; border-color: #15803d; }
+.sw.cut-ready { background: #2563eb; border-color: #1d4ed8; }
+.sw.cut-blocked { background: #9ca3af; border-color: #6b7280; }
 
 .board-card {
   border: 1px solid var(--border);
@@ -239,7 +242,12 @@ input:focus { outline: 2px solid rgba(37, 99, 235, 0.35); border-color: var(--bl
 .remainder-bg { fill: #fef3c7; }
 .board-border { fill: none; stroke: #1f2937; stroke-width: 2; }
 .kerf-band { fill: #d4d4d4; opacity: 0.9; }
+.kerf-band.done { fill: #bbf7d0; }
+.kerf-band.ready { fill: #bfdbfe; }
 .kerf-line { stroke: #525252; stroke-width: 1.1; }
+.kerf-line.done { stroke: #16a34a; stroke-width: 1.6; }
+.kerf-line.ready { stroke: #2563eb; stroke-width: 1.6; }
+.kerf-line.blocked { stroke: #9ca3af; }
 .part-label {
   text-anchor: middle;
   font-size: 12px;
@@ -261,12 +269,131 @@ input:focus { outline: 2px solid rgba(37, 99, 235, 0.35); border-color: var(--bl
   pointer-events: none;
 }
 .cut-badge circle { fill: #1f2937; stroke: #fff; stroke-width: 1.5; }
+.cut-badge.done circle { fill: #16a34a; }
+.cut-badge.ready circle { fill: #2563eb; }
+.cut-badge.blocked circle { fill: #9ca3af; }
 .cut-badge text {
   text-anchor: middle;
   dominant-baseline: central;
   font-size: 11px;
   font-weight: 700;
   fill: #fff;
+}
+
+/* ---- 刀路执行记录（逐板，裁切图旁） ---- */
+.board-main {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.board-diagram-col { flex: 1 1 auto; min-width: 0; }
+.cut-exec-panel {
+  flex: 0 0 300px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px 12px;
+}
+.cut-exec-panel h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cut-exec-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cut-exec-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 460px;
+  overflow-y: auto;
+}
+.cut-exec-row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  grid-template-areas:
+    "seq desc status"
+    "seq pred btn";
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: #fff;
+  font-size: 12px;
+}
+.cut-exec-row.done { background: #f0fdf4; border-color: #86efac; }
+.cut-exec-row.ready { background: #eff6ff; border-color: #93c5fd; }
+.cut-exec-row.blocked { color: var(--muted); }
+.cut-exec-seq {
+  grid-area: seq;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #1f2937;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cut-exec-row.done .cut-exec-seq { background: #16a34a; }
+.cut-exec-row.ready .cut-exec-seq { background: #2563eb; }
+.cut-exec-row.blocked .cut-exec-seq { background: #9ca3af; }
+.cut-exec-desc { grid-area: desc; font-variant-numeric: tabular-nums; }
+.cut-exec-pred { grid-area: pred; font-size: 11px; color: var(--muted); }
+.cut-exec-status {
+  grid-area: status;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.cut-exec-status.done { background: #dcfce7; color: #15803d; font-weight: 600; }
+.cut-exec-status.ready { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
+.cut-exec-status.blocked { background: #f1f5f9; color: #64748b; }
+.cut-exec-btn {
+  grid-area: btn;
+  justify-self: end;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+.cut-exec-btn.blocked {
+  border-style: dashed;
+  color: #64748b;
+  background: #fff;
+}
+.cut-exec-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.cut-exec-progress { font-weight: 600; color: #1d4ed8; }
+@media (max-width: 1100px) {
+  .board-main { flex-direction: column; }
+  .cut-exec-panel { flex: 1 1 auto; width: 100%; }
 }
 
 .board-stats {

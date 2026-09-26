@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import BoardDiagram, { partColor } from './BoardDiagram.jsx';
+import { cutStatus, markCut, undoCut } from './cutProgress.js';
 
 const SAMPLE_BOARD = { boardWidth: 2440, boardHeight: 1220, kerf: 3, boardPrice: 180 };
 
@@ -50,6 +51,9 @@ const EMPTY_TARIFF = { start: '', end: '', price: '' };
 
 // 损坏件三元身份：订单号 + 零件名 + 件号（跨订单同名零件互不影响）
 const itemKey = (order, part, index) => JSON.stringify([order, part, index]);
+
+// 刀路执行记录：板上无任何已完成刀时的共享空集（避免每次渲染新建）
+const EMPTY_SET = new Set();
 
 // 设备最大单刀长度：留空表示不限制；填写时必须为正数
 const validateMaxCut = (value) => {
@@ -140,6 +144,10 @@ export default function App() {
   const [electricity, setElectricity] = useState(null);
   const [electricityError, setElectricityError] = useState('');
   const [electricityLoading, setElectricityLoading] = useState(false);
+  // 刀路执行记录：{ 板号: Set(已完成刀序) } 与逐板操作提示；仅存当前页面并绑定
+  // 当前生成方案——修改表单不影响记录，重新生成方案时清空
+  const [cutDone, setCutDone] = useState({});
+  const [cutHints, setCutHints] = useState({});
 
   // ---- 订单 / 零件行编辑 ----
   const updateOrder = (oi, key, value) => {
@@ -199,6 +207,12 @@ export default function App() {
     setElectricityError('');
   };
 
+  // 刀路执行记录：仅绑定当前生成方案，重新生成方案时清空
+  const resetCutExec = () => {
+    setCutDone({});
+    setCutHints({});
+  };
+
   // 仅计价参数（功率、开工时刻、电价时段）变化：只清空电费核算，保留原排程
   const resetElectricity = () => {
     setElectricity(null);
@@ -220,6 +234,7 @@ export default function App() {
     resetRecut();
     resetCancel();
     resetOffcuts();
+    resetCutExec();
     setMachines(SAMPLE_MACHINES.map((m) => ({ ...m })));
     setTariffs(SAMPLE_TARIFFS.map((t) => ({ ...t })));
     resetSchedule();
@@ -289,6 +304,7 @@ export default function App() {
     resetCancel();
     resetOffcuts();
     resetSchedule();
+    resetCutExec();
     setLoading(true);
     try {
       const res = await fetch('/api/cut', {
@@ -704,11 +720,49 @@ export default function App() {
     });
   };
 
+  // ---- 刀路执行记录：标记完成 / 撤销（仅存当前页面，绑定当前方案）----
+  // 标记完成：仅当直接前置已完成才可标记；越序时提示缺少的前置刀；重复标记不计数
+  const markCutExec = (boardIndex, seq) => {
+    const board = result?.boards.find((b) => b.index === boardIndex);
+    if (!board) return;
+    const done = cutDone[boardIndex] || EMPTY_SET;
+    const r = markCut(board.cuts, done, seq);
+    if (r.missing) {
+      setCutHints((prev) => ({
+        ...prev,
+        [boardIndex]: `第 ${seq} 刀暂不可执行：缺少前置刀，请先完成第 ${r.missing} 刀`,
+      }));
+      return;
+    }
+    if (r.repeated) {
+      setCutHints((prev) => ({ ...prev, [boardIndex]: `第 ${seq} 刀已完成，重复标记不计数` }));
+      return;
+    }
+    setCutDone((prev) => ({ ...prev, [boardIndex]: r.done }));
+    setCutHints((prev) => ({ ...prev, [boardIndex]: '' }));
+  };
+
+  // 撤销一刀：同时撤销其已完成的所有后继刀，保留其他分支状态
+  const undoCutExec = (boardIndex, seq) => {
+    const board = result?.boards.find((b) => b.index === boardIndex);
+    if (!board) return;
+    const done = cutDone[boardIndex] || EMPTY_SET;
+    const next = undoCut(board.cuts, done, seq);
+    const cascaded = [...done].filter((s) => s !== seq && !next.has(s)).sort((a, b) => a - b);
+    setCutDone((prev) => ({ ...prev, [boardIndex]: next }));
+    setCutHints((prev) => ({
+      ...prev,
+      [boardIndex]: cascaded.length
+        ? `已撤销第 ${seq} 刀，并连带撤销其后继刀：第 ${cascaded.join('、')} 刀`
+        : `已撤销第 ${seq} 刀`,
+    }));
+  };
+
   return (
     <div className="page">
       <header className="site-header">
         <h1>矩形板材下料 · 多订单拼版断头切割排料</h1>
-        <p>多张订单混合拼版：按订单与零件行顺序断头切割，可登记带唯一编号的临时余板库存（已开板放不下时先用余板、最后开标准新板），结果保留订单归属，按单取件并分摊材料费；方案生成后自动列出可回收余料清单，可勾选一键追加回余板库存；损坏件可勾选后生成独立补切方案；还可按订单预览撤单前后影响（原方案与表单不变）；也可把当前表单依次保存为多批做连续批次用料预演（首批余板为初始库存，余料按批回收入池，逐批给出新开标准板与累计材料费）；并可为已生成的方案做机台开料排程：在 2～3 台机台间分配整板加工（每板不可拆分、超单刀上限的机台不可分配），给出逐板机台、起止秒数与最短总完工时间</p>
+        <p>多张订单混合拼版：按订单与零件行顺序断头切割，可登记带唯一编号的临时余板库存（已开板放不下时先用余板、最后开标准新板），结果保留订单归属，按单取件并分摊材料费；方案生成后自动列出可回收余料清单，可勾选一键追加回余板库存；损坏件可勾选后生成独立补切方案；还可按订单预览撤单前后影响（原方案与表单不变）；也可把当前表单依次保存为多批做连续批次用料预演（首批余板为初始库存，余料按批回收入池，逐批给出新开标准板与累计材料费）；并可为已生成的方案做机台开料排程：在 2～3 台机台间分配整板加工（每板不可拆分、超单刀上限的机台不可分配），给出逐板机台、起止秒数与最短总完工时间；每张板的裁切图旁还有刀路执行记录：按前置关系逐刀标记完成或撤销（撤销连带后继刀），图上区分已完成、可执行与被阻塞的刀</p>
       </header>
 
       <main className="layout">
@@ -942,6 +996,7 @@ export default function App() {
                 <li>选择一张订单即可预览撤单影响：按生成方案时的输入快照对比撤单前后用板与材料费，原方案不变</li>
                 <li>连续批次用料预演：依次保存多批表单快照，首批余板为初始库存，余料按批回收入池供后续批次使用，逐批给出新开标准板数与累计材料费</li>
                 <li>机台开料排程：为已生成的方案在 2～3 台机台间分配整板加工，给出逐板机台、起止秒数与最短总完工时间，不改原排料结果</li>
+                <li>刀路执行记录：逐板图旁按刀序标记每刀完成（前置刀完成才可执行，分支可交错），撤销连带后继刀，图上区分已完成 / 可执行 / 被阻塞</li>
                 <li>分时电费核算：填写机台运行功率、开工时刻与一天内电价时段（无重叠完整覆盖 00:00～24:00），逐板起止秒数换算实际时刻、跨边界 / 午夜分段计费，列出逐板与逐机台电费，改计价参数即可重新核算</li>
               </ul>
             </div>
@@ -949,7 +1004,15 @@ export default function App() {
 
           {result && (
             <>
-              <ResultView result={result} selected={selected} onToggleDamaged={toggleDamaged} />
+              <ResultView
+                result={result}
+                selected={selected}
+                onToggleDamaged={toggleDamaged}
+                cutDone={cutDone}
+                cutHints={cutHints}
+                onMarkCut={markCutExec}
+                onUndoCut={undoCutExec}
+              />
               <OffcutSection
                 result={result}
                 selected={offcutSelected}
@@ -1003,13 +1066,13 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        断头切割规则：每一刀都贯穿当前所在矩形区域 · 允许零件旋转 90° · 按订单与零件行固定顺序排料 · 可回收余料取自各板最终空闲矩形（不含零件与锯缝），可追加为临时余板库存 · 补切仅重排所选损坏件，原方案不变 · 撤单预览按输入快照对比前后方案，表单与原方案不变 · 连续预演按批次快照逐批排料，余板池跨批流转，表单与单次方案不变 · 机台排程按输入快照重算同一方案，在 2～3 台机台间分配整板加工（超单刀上限的机台不可分配），同一机台按板号顺序连续加工，取全部板完成时间最小的分配，原排料结果不变 · 分时电费核算沿用同一排程，每板起止秒数按机台开工时刻换算实际时刻，跨电价边界或午夜按日循环拆分（分段费用 = 功率 × 加工秒数 ÷ 3600 × 电价，逐板四舍五入到分再汇总），修改计价参数只重新核算、不改原排料与排程
+        断头切割规则：每一刀都贯穿当前所在矩形区域 · 允许零件旋转 90° · 按订单与零件行固定顺序排料 · 可回收余料取自各板最终空闲矩形（不含零件与锯缝），可追加为临时余板库存 · 补切仅重排所选损坏件，原方案不变 · 撤单预览按输入快照对比前后方案，表单与原方案不变 · 连续预演按批次快照逐批排料，余板池跨批流转，表单与单次方案不变 · 机台排程按输入快照重算同一方案，在 2～3 台机台间分配整板加工（超单刀上限的机台不可分配），同一机台按板号顺序连续加工，取全部板完成时间最小的分配，原排料结果不变 · 分时电费核算沿用同一排程，每板起止秒数按机台开工时刻换算实际时刻，跨电价边界或午夜按日循环拆分（分段费用 = 功率 × 加工秒数 ÷ 3600 × 电价，逐板四舍五入到分再汇总），修改计价参数只重新核算、不改原排料与排程 · 刀路执行记录按未舍入几何回放矩形切分得到每刀直接前置（所切矩形的产生刀，初始整板无前置），仅当前置刀已完成才可标记完成，不同分支可交错执行，撤销一刀连带撤销其已完成的所有后继刀；记录仅存当前页面并绑定生成方案，重新生成方案即清空，不影响落位、分摊与排程
       </footer>
     </div>
   );
 }
 
-function ResultView({ result, selected, onToggleDamaged }) {
+function ResultView({ result, selected, onToggleDamaged, cutDone, cutHints, onMarkCut, onUndoCut }) {
   return (
     <>
       <h2>排料结果</h2>
@@ -1165,6 +1228,9 @@ function ResultView({ result, selected, onToggleDamaged }) {
       <div className="legend">
         <span><i className="sw remainder" />余料</span>
         <span><i className="sw kerf" />锯缝（虚线为刀刃，数字为下刀次序）</span>
+        <span><i className="sw cut-done" />已完成刀</span>
+        <span><i className="sw cut-ready" />可执行刀</span>
+        <span><i className="sw cut-blocked" />被阻塞刀</span>
         {legendKeys(result).map(({ order, part }) => (
           <span key={`${order}⟂${part}`}>
             <i className="sw" style={{ background: partColor(part, order) }} />
@@ -1174,7 +1240,10 @@ function ResultView({ result, selected, onToggleDamaged }) {
       </div>
 
       {/* 逐板图与刀序（按每块板的实际尺寸绘图：余板尺寸可能与标准板不同）*/}
-      {result.boards.map((b) => (
+      {result.boards.map((b) => {
+        const doneSet = cutDone[b.index] || EMPTY_SET;
+        const statusMap = cutStatus(b.cuts, doneSet);
+        return (
         <div className={`board-card ${b.kind === 'stock' ? 'stock-board' : ''}`} key={b.index}>
           <h3>
             第 {b.index} 张板 / 共 {result.boardsCount} 张
@@ -1185,13 +1254,26 @@ function ResultView({ result, selected, onToggleDamaged }) {
             )}
             {b.kind === 'standard' && <span className="board-price">板价 ¥{yuan(b.cost.priceCents)}</span>}
           </h3>
-          <BoardDiagram board={b} boardWidth={b.width} boardHeight={b.height} />
+          <div className="board-main">
+            <div className="board-diagram-col">
+              <BoardDiagram board={b} boardWidth={b.width} boardHeight={b.height} cutStatus={statusMap} />
+            </div>
+            <CutExecPanel
+              board={b}
+              doneSet={doneSet}
+              statusMap={statusMap}
+              hint={cutHints[b.index] || ''}
+              onMark={(seq) => onMarkCut(b.index, seq)}
+              onUndo={(seq) => onUndoCut(b.index, seq)}
+            />
+          </div>
           <div className="board-stats">
             <span>零件 {fmt(b.partsArea)}</span>
             <span>锯缝 {fmt(b.kerfArea)}</span>
             <span>余料 {fmt(b.remainderArea)}</span>
             <span>利用率 {b.utilization}%</span>
             <span>{b.cuts.length} 刀</span>
+            <span className="cut-exec-progress">已完成 {doneSet.size} / {b.cuts.length} 刀</span>
             {result.maxCutLength != null && (
               <span className="cut-limit">实际最长刀 {strip(b.longestCut)} / 上限 {strip(result.maxCutLength)}</span>
             )}
@@ -1261,8 +1343,58 @@ function ResultView({ result, selected, onToggleDamaged }) {
             </table>
           </details>
         </div>
-      ))}
+        );
+      })}
     </>
+  );
+}
+
+/**
+ * 刀路执行记录面板（逐板，位于裁切图旁）：
+ * 按刀序列出每刀的方向、贯穿长度与直接前置，区分已完成 / 可执行 / 被阻塞；
+ * 仅当前置刀已完成才可标记完成（不同分支可交错执行），撤销一刀连带撤销其
+ * 已完成的所有后继刀；面板顶部显示该板完成刀数。记录仅存当前页面。
+ */
+function CutExecPanel({ board, doneSet, statusMap, hint, onMark, onUndo }) {
+  const total = board.cuts.length;
+  return (
+    <div className="cut-exec-panel">
+      <h4>
+        刀路执行记录
+        <span className="cut-exec-count">已完成 {doneSet.size} / {total} 刀</span>
+      </h4>
+      {total === 0 ? (
+        <p className="hint">该板无刀路（零件恰好占满或整板余料），无需执行。</p>
+      ) : (
+        <ol className="cut-exec-list">
+          {board.cuts.map((c) => {
+            const st = statusMap[c.seq];
+            return (
+              <li key={c.seq} className={`cut-exec-row ${st}`}>
+                <span className="cut-exec-seq">{c.seq}</span>
+                <span className="cut-exec-desc">
+                  {c.type === 'v' ? '竖切' : '横切'} · 长 {strip(c.length)}
+                </span>
+                <span className="cut-exec-pred">
+                  {c.pred > 0 ? `前置：第 ${c.pred} 刀` : '前置：整板'}
+                </span>
+                <span className={`cut-exec-status ${st}`}>
+                  {st === 'done' ? '已完成' : st === 'ready' ? '可执行' : '被阻塞'}
+                </span>
+                {st === 'done' ? (
+                  <button type="button" className="btn ghost cut-exec-btn"
+                    onClick={() => onUndo(c.seq)}>撤销</button>
+                ) : (
+                  <button type="button" className={`btn cut-exec-btn ${st === 'ready' ? 'primary' : 'blocked'}`}
+                    onClick={() => onMark(c.seq)}>标记完成</button>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {hint && <p className="cut-exec-hint" role="status">{hint}</p>}
+    </div>
   );
 }
 
